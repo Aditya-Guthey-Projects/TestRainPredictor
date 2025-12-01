@@ -1,0 +1,18 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+    commands:
+      - pip install --upgrade pip
+      - pip install boto3 sagemaker pandas scikit-learn joblib
+
+  build:
+    commands:
+      - echo "Running partial_fit automation..."
+      - python partial_fit_automate.py
+
+artifacts:
+  files:
+    - '**/*'
