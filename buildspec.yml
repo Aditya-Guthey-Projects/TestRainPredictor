@@ -5,11 +5,16 @@ phases:
     runtime-versions:
       python: 3.9
     commands:
+      - echo "Updating pip and installing dependencies..."
       - pip install --upgrade pip
-      - pip install boto3 sagemaker pandas scikit-learn joblib
+      - pip install "numpy<2.0" "pandas<2.0" "scikit-learn<1.4" joblib boto3 sagemaker
+      - echo "Installation complete."
 
   build:
     commands:
+      - echo "Listing source files..."
+      - ls -R $CODEBUILD_SRC_DIR
+
       - echo "Running partial_fit automation..."
       - python partial_fit_automate.py
 
