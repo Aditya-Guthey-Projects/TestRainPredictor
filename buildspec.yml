@@ -6,7 +6,7 @@ phases:
       python: 3.9
     commands:
       - echo "Updating pip and installing dependencies..."
-      - pip install numpy pandas scikit-learn joblib boto3 sagemaker
+      - pip install numpy==1.26.4 pandas==1.5.3 scikit-learn==1.2.2 joblib boto3
       - echo "Installation complete."
 
   build:
