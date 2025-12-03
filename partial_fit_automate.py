@@ -7,7 +7,7 @@ import tarfile
 from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
 import sagemaker
-from sagemaker.model import Model
+from sagemaker import Model
 import logging
 
 # Set up logging
