@@ -276,50 +276,160 @@ def upload_to_s3(s3_client, paths):
 def update_sagemaker_endpoint():
     """Update SageMaker endpoint with new model"""
     try:
-        logger.info(f"Updating SageMaker endpoint: {ENDPOINT_NAME}")
+        logger.info(f"Setting up SageMaker endpoint: {ENDPOINT_NAME}")
         
+        # Initialize SageMaker session
         session = sagemaker.Session(
             boto_session=boto3.Session(region_name=REGION)
         )
         
-        # Create model object
+        # Model data URL
+        model_data_url = f"s3://{S3_BUCKET}/{MODEL_TAR_S3_KEY}"
+        logger.info(f"Model data URL: {model_data_url}")
+        
+        # Create SageMaker model object
+        # IMPORTANT: For scikit-learn models, use the ScikitLearnModel or Model with image_uri
+        image_uri = sagemaker.image_uris.retrieve(
+            framework="sklearn",
+            region=REGION,
+            version="1.0-1",
+            py_version="py3",
+            instance_type="ml.t2.medium"
+        )
+        
+        logger.info(f"Using container image: {image_uri}")
+        
         sm_model = Model(
-            model_data=f"s3://{S3_BUCKET}/{MODEL_TAR_S3_KEY}",
+            image_uri=image_uri,  # Specify the container image
+            model_data=model_data_url,
             role=SAGEMAKER_ROLE,
             sagemaker_session=session,
             entry_point="inference.py"
         )
         
-        # Check if endpoint exists
+        # Check if endpoint already exists
         sm_client = boto3.client("sagemaker", region_name=REGION)
+        endpoint_exists = False
+        
         try:
-            sm_client.describe_endpoint(EndpointName=ENDPOINT_NAME)
-            update_endpoint = True
-            logger.info(f"Endpoint '{ENDPOINT_NAME}' exists, updating...")
+            response = sm_client.describe_endpoint(EndpointName=ENDPOINT_NAME)
+            endpoint_exists = True
+            endpoint_status = response['EndpointStatus']
+            logger.info(f"✅ Endpoint '{ENDPOINT_NAME}' exists (Status: {endpoint_status})")
         except sm_client.exceptions.ClientError as e:
-            if "Could not find endpoint" in str(e):
-                update_endpoint = False
-                logger.info(f"Endpoint '{ENDPOINT_NAME}' doesn't exist, creating new...")
+            error_code = e.response['Error']['Code']
+            if error_code == 'ValidationException' and 'Could not find endpoint' in str(e):
+                logger.info(f"ℹ️  Endpoint '{ENDPOINT_NAME}' does not exist, creating new...")
+                endpoint_exists = False
             else:
-                raise
+                logger.error(f"❌ Error checking endpoint: {error_code} - {str(e)}")
+                return False
         
-        # Deploy/update endpoint
-        sm_model.deploy(
-            initial_instance_count=1,
-            instance_type="ml.t2.medium",
-            endpoint_name=ENDPOINT_NAME,
-            update_endpoint=update_endpoint,
-            wait=False  # Don't wait (deployment takes time)
+        # Deploy or update endpoint
+        logger.info(f"{'Updating existing' if endpoint_exists else 'Creating new'} endpoint...")
+        
+        try:
+            predictor = sm_model.deploy(
+                initial_instance_count=1,
+                instance_type="ml.t2.medium",
+                endpoint_name=ENDPOINT_NAME,
+                update_endpoint=endpoint_exists,  # True=update, False=create
+                wait=False  # Don't wait for deployment to complete
+            )
+            
+            logger.info(f"✅ Endpoint '{ENDPOINT_NAME}' deployment initiated successfully")
+            logger.info("⚠️  Note: Endpoint deployment may take 5-10 minutes to complete")
+            logger.info("⚠️  Check AWS Console → SageMaker → Endpoints for status")
+            
+            return True
+            
+        except Exception as deploy_error:
+            logger.error(f"❌ Deployment failed: {str(deploy_error)}")
+            logger.info("Trying alternative deployment method...")
+            
+            # Try alternative method using boto3 directly
+            return create_endpoint_with_boto3(sm_client, endpoint_exists, model_data_url, image_uri)
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to update SageMaker endpoint: {str(e)}", exc_info=True)
+        return False
+
+
+def create_endpoint_with_boto3(sm_client, endpoint_exists, model_data_url, image_uri):
+    """Alternative method to create endpoint using boto3 directly"""
+    try:
+        import time
+        from datetime import datetime
+        
+        # Generate unique names
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        model_name = f"{ENDPOINT_NAME}-model-{timestamp}"
+        endpoint_config_name = f"{ENDPOINT_NAME}-config-{timestamp}"
+        
+        logger.info(f"Using alternative deployment method...")
+        logger.info(f"Model name: {model_name}")
+        logger.info(f"Endpoint config: {endpoint_config_name}")
+        
+        # Step 1: Create model
+        logger.info("Creating SageMaker model...")
+        sm_client.create_model(
+            ModelName=model_name,
+            PrimaryContainer={
+                "Image": image_uri,
+                "ModelDataUrl": model_data_url,
+                "Environment": {
+                    "SAGEMAKER_PROGRAM": "inference.py",
+                    "SAGEMAKER_SUBMIT_DIRECTORY": "/opt/ml/model/code"
+                }
+            },
+            ExecutionRoleArn=SAGEMAKER_ROLE
         )
+        logger.info(f"✅ Model created: {model_name}")
         
-        logger.info(f"✓ Endpoint '{ENDPOINT_NAME}' update initiated")
-        logger.info("Note: Endpoint deployment may take 5-10 minutes to complete")
+        # Step 2: Create endpoint configuration
+        logger.info("Creating endpoint configuration...")
+        sm_client.create_endpoint_config(
+            EndpointConfigName=endpoint_config_name,
+            ProductionVariants=[
+                {
+                    "VariantName": "AllTraffic",
+                    "ModelName": model_name,
+                    "InitialInstanceCount": 1,
+                    "InstanceType": "ml.t2.medium",
+                    "InitialVariantWeight": 1.0
+                }
+            ]
+        )
+        logger.info(f"✅ Endpoint config created: {endpoint_config_name}")
+        
+        # Step 3: Create or update endpoint
+        if endpoint_exists:
+            # Update existing endpoint
+            logger.info(f"Updating endpoint '{ENDPOINT_NAME}'...")
+            sm_client.update_endpoint(
+                EndpointName=ENDPOINT_NAME,
+                EndpointConfigName=endpoint_config_name
+            )
+            action = "updated"
+        else:
+            # Create new endpoint
+            logger.info(f"Creating new endpoint '{ENDPOINT_NAME}'...")
+            sm_client.create_endpoint(
+                EndpointName=ENDPOINT_NAME,
+                EndpointConfigName=endpoint_config_name
+            )
+            action = "created"
+        
+        logger.info(f"✅ Endpoint '{ENDPOINT_NAME}' {action} successfully")
+        logger.info("⚠️  Deployment is in progress. Check status in SageMaker console.")
+        logger.info(f"⚠️  Model: {model_name}")
+        logger.info(f"⚠️  Endpoint Config: {endpoint_config_name}")
+        
         return True
         
     except Exception as e:
-        logger.error(f"Failed to update SageMaker endpoint: {str(e)}")
+        logger.error(f"❌ Alternative deployment also failed: {str(e)}", exc_info=True)
         return False
-
 
 def main():
     """Main execution function"""
