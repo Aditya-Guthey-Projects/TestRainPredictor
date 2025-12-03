@@ -1,28 +1,35 @@
 version: 0.2
 
 phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing dependencies..."
+      - pip install --upgrade pip
+      - pip install pandas scikit-learn joblib boto3 sagemaker
+      - echo "Installation complete."
+
   pre_build:
     commands:
       - echo "Environment check..."
       - python --version
-      - gcc --version
-      - pip --version
-
-  install:
-    runtime-versions:
-      python: 3.11  # 3.11 available in newer images
-    commands:
-      - echo "Installing dependencies..."
-      - pip install --upgrade pip
-      - pip install pandas scikit-learn joblib boto3
-      - echo "Installation complete."
+      - pip list | grep -E "(pandas|scikit|boto3|sagemaker)"
+      - echo "Current directory structure:"
+      - find . -type f -name "*.py" -o -name "*.csv" | head -20
+      - echo "Checking for csv_folder..."
+      - ls -la csv_folder/ 2>/dev/null || echo "csv_folder not found or empty"
 
   build:
     commands:
-      - echo "Listing source files..."
-      - ls -R $CODEBUILD_SRC_DIR
       - echo "Running partial_fit automation..."
-      - python partial_fit_automate.py
+      - python partial_fit_automate.py || { echo "Script failed with exit code $?"; exit 1; }
+      - echo "Script completed successfully."
+
+  post_build:
+    commands:
+      - echo "Build completed at $(date)"
+      - echo "Check CloudWatch logs for deployment status"
 
 artifacts:
   files:
