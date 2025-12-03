@@ -1,93 +1,65 @@
-import os
 import joblib
-import json
 import numpy as np
-import pandas as pd
-
-# -------------------------------
-# 1. Load model and scaler
-# -------------------------------
+import os
+import json
 
 def model_fn(model_dir):
-    """
-    SageMaker loads model.tar.gz into model_dir.
-    sgd_model.joblib and scaler.joblib must be inside.
-    """
-    model_path = os.path.join(model_dir, "sgd_model.joblib")
-    scaler_path = os.path.join(model_dir, "scaler.joblib")
+    """Load model and scaler from model_dir"""
+    try:
+        clf = joblib.load(os.path.join(model_dir, "sgd_model.joblib"))
+        scaler = joblib.load(os.path.join(model_dir, "scaler.joblib"))
+        return {"model": clf, "scaler": scaler}
+    except Exception as e:
+        raise ValueError(f"Error loading model: {str(e)}")
 
-    clf = joblib.load(model_path)
-    scaler = joblib.load(scaler_path)
-
-    return {"model": clf, "scaler": scaler}
-
-
-# -------------------------------
-# 2. Input handler
-# -------------------------------
-
-def input_fn(request_body, content_type):
-    """
-    Expected input format:
-    JSON:
-    {
-        "data": {
-            "MinTemp": value,
-            "MaxTemp": value,
-            ...
-        }
-    }
-    """
-    if content_type == "application/json":
-        body = json.loads(request_body)
-
-        # Parse provided data
-        if "data" not in body:
-            raise ValueError("JSON must contain a 'data' field")
-
-        data = body["data"]
-
-        # Convert dict → pandas dataframe with one row
-        df = pd.DataFrame([data])
-
-        return df
-
+def input_fn(request_body, request_content_type):
+    """Parse input data"""
+    if request_content_type == 'application/json':
+        data = json.loads(request_body)
+        # Expecting format: {"instances": [[feature1, feature2, ...]]}
+        instances = data.get("instances", [])
+        return np.array(instances)
+    elif request_content_type == 'text/csv':
+        # CSV format: feature1,feature2,... per line
+        import io
+        import csv
+        f = io.StringIO(request_body)
+        return np.array(list(csv.reader(f)), dtype=float)
     else:
-        raise ValueError(f"Content type {content_type} not supported")
+        raise ValueError(f"Unsupported content type: {request_content_type}")
 
-
-# -------------------------------
-# 3. Prediction
-# -------------------------------
-
-def predict_fn(input_data, model_objects):
-    clf = model_objects["model"]
-    scaler = model_objects["scaler"]
-
-    # Scale input features
-    X_scaled = scaler.transform(input_data)
-
-    # Prediction
-    pred = clf.predict(X_scaled)
-    proba = clf.predict_proba(X_scaled)[0][1]  # probability of class 1
-
-    result = {
-        "prediction": int(pred[0]),
-        "probability_of_rain": float(proba)
+def predict_fn(input_data, model_dict):
+    """Make predictions"""
+    clf = model_dict["model"]
+    scaler = model_dict["scaler"]
+    
+    if len(input_data.shape) == 1:
+        input_data = input_data.reshape(1, -1)
+    
+    # Scale features
+    scaled_data = scaler.transform(input_data)
+    
+    # Make predictions
+    predictions = clf.predict(scaled_data)
+    probabilities = clf.predict_proba(scaled_data)
+    
+    return {
+        "predictions": predictions.tolist(),
+        "probabilities": probabilities.tolist()
     }
 
-    return result
-
-
-# -------------------------------
-# 4. Output handler
-# -------------------------------
-
-def output_fn(prediction_output, accept):
-    """
-    Format final response as JSON
-    """
+def output_fn(prediction, accept):
+    """Format output"""
     if accept == "application/json":
-        return json.dumps(prediction_output), accept
-
-    raise ValueError(f"Accept {accept} not supported")
+        return json.dumps(prediction), accept
+    elif accept == "text/csv":
+        # Format as CSV: prediction,prob_class0,prob_class1
+        import io
+        import csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+        for pred, probs in zip(prediction["predictions"], prediction["probabilities"]):
+            writer.writerow([pred] + probs)
+        return output.getvalue(), accept
+    else:
+        raise ValueError(f"Unsupported accept type: {accept}")
