@@ -26,45 +26,64 @@ SAGEMAKER_ROLE = "arn:aws:iam::493272324412:role/service-role/AmazonSageMaker-Ex
 # S3 paths
 MODEL_TAR_S3_KEY = "model/model.tar.gz"
 
-# Local paths
-TEMP_DIR = "/tmp/partial_fit_temp"
-MODEL_TAR_LOCAL = os.path.join(TEMP_DIR, "model.tar.gz")
-EXTRACT_DIR = os.path.join(TEMP_DIR, "extracted")
-UPDATED_MODEL_DIR = os.path.join(TEMP_DIR, "updated_model")
-UPDATED_TAR_PATH = os.path.join(TEMP_DIR, "updated_model.tar.gz")
-
 # CSV folder in repo
 INPUT_DATA_PATH = "csv_folder"
 
-# Ensure temp directories exist
-for dir_path in [TEMP_DIR, EXTRACT_DIR, UPDATED_MODEL_DIR]:
-    os.makedirs(dir_path, exist_ok=True)
 
-
-def clean_temp_directories():
-    """Clean temporary directories"""
-    for dir_path in [TEMP_DIR]:
-        if os.path.exists(dir_path):
-            shutil.rmtree(dir_path)
+def clean_and_create_directories():
+    """Clean and create all necessary directories"""
+    # Base temp directory
+    temp_dir = "/tmp/partial_fit_temp"
+    
+    # Remove if exists and create fresh
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    
+    # Create directory structure
+    directories = [
+        temp_dir,
+        os.path.join(temp_dir, "extracted"),
+        os.path.join(temp_dir, "updated_model")
+    ]
+    
+    for dir_path in directories:
         os.makedirs(dir_path, exist_ok=True)
+        logger.debug(f"Created directory: {dir_path}")
+    
+    return {
+        "temp_dir": temp_dir,
+        "model_tar_local": os.path.join(temp_dir, "model.tar.gz"),
+        "extract_dir": os.path.join(temp_dir, "extracted"),
+        "updated_model_dir": os.path.join(temp_dir, "updated_model"),
+        "updated_tar_path": os.path.join(temp_dir, "updated_model.tar.gz")
+    }
 
 
-def download_and_extract_model(s3_client):
+def download_and_extract_model(s3_client, paths):
     """Download model.tar.gz from S3 and extract it"""
     logger.info(f"Downloading model from s3://{S3_BUCKET}/{MODEL_TAR_S3_KEY}")
     
     try:
         # Download model.tar.gz
-        s3_client.download_file(S3_BUCKET, MODEL_TAR_S3_KEY, MODEL_TAR_LOCAL)
-        logger.info(f"✓ Downloaded model.tar.gz ({os.path.getsize(MODEL_TAR_LOCAL) / 1024:.2f} KB)")
+        s3_client.download_file(S3_BUCKET, MODEL_TAR_S3_KEY, paths["model_tar_local"])
+        file_size = os.path.getsize(paths["model_tar_local"])
+        logger.info(f"✓ Downloaded model.tar.gz ({file_size / 1024:.2f} KB)")
         
         # Extract tar.gz
-        with tarfile.open(MODEL_TAR_LOCAL, "r:gz") as tar:
-            tar.extractall(path=EXTRACT_DIR)
+        with tarfile.open(paths["model_tar_local"], "r:gz") as tar:
+            tar.extractall(path=paths["extract_dir"])
         
         # List extracted files
-        extracted_files = os.listdir(EXTRACT_DIR)
+        extracted_files = os.listdir(paths["extract_dir"])
         logger.info(f"Extracted files: {extracted_files}")
+        
+        # Verify required files exist
+        required_files = ["sgd_model.joblib", "scaler.joblib"]
+        missing_files = [f for f in required_files if f not in extracted_files]
+        
+        if missing_files:
+            logger.error(f"Missing required files in tar.gz: {missing_files}")
+            return False
         
         return True
         
@@ -73,23 +92,22 @@ def download_and_extract_model(s3_client):
         return False
 
 
-def load_model_and_scaler():
+def load_model_and_scaler(paths):
     """Load model and scaler from extracted files"""
-    model_path = os.path.join(EXTRACT_DIR, "sgd_model.joblib")
-    scaler_path = os.path.join(EXTRACT_DIR, "scaler.joblib")
-    
-    if not os.path.exists(model_path):
-        logger.error(f"Model file not found: {model_path}")
-        return None, None
-    if not os.path.exists(scaler_path):
-        logger.error(f"Scaler file not found: {scaler_path}")
-        return None, None
+    model_path = os.path.join(paths["extract_dir"], "sgd_model.joblib")
+    scaler_path = os.path.join(paths["extract_dir"], "scaler.joblib")
     
     try:
         clf = joblib.load(model_path)
         scaler = joblib.load(scaler_path)
         logger.info("✓ Loaded existing model and scaler")
+        
+        # Log model info
+        logger.info(f"Model type: {type(clf)}")
+        logger.info(f"Model classes: {clf.classes_ if hasattr(clf, 'classes_') else 'Not fitted yet'}")
+        
         return clf, scaler
+        
     except Exception as e:
         logger.error(f"Failed to load model/scaler: {str(e)}")
         return None, None
@@ -97,6 +115,10 @@ def load_model_and_scaler():
 
 def load_csv_data():
     """Load the latest CSV file from csv_folder"""
+    if not os.path.exists(INPUT_DATA_PATH):
+        logger.error(f"Directory not found: {INPUT_DATA_PATH}")
+        return None, None
+    
     csv_files = [f for f in os.listdir(INPUT_DATA_PATH) if f.endswith(".csv")]
     
     if not csv_files:
@@ -110,20 +132,28 @@ def load_csv_data():
     
     try:
         data = pd.read_csv(csv_path)
+        logger.info(f"Loaded CSV with shape: {data.shape}")
+        
+        # Show columns
+        logger.info(f"Columns in CSV: {list(data.columns)}")
         
         # Check required columns
         required_cols = ["Date", "Location", "Rain Tomorrow"]
         missing_cols = [col for col in required_cols if col not in data.columns]
         if missing_cols:
             logger.error(f"Missing required columns: {missing_cols}")
+            logger.info(f"Available columns: {list(data.columns)}")
             return None, None
         
         # Prepare features and target
         X = data.drop(columns=["Date", "Location", "Rain Tomorrow"])
         y = data["Rain Tomorrow"]
         
-        logger.info(f"Data shape: {X.shape}")
-        logger.info(f"Target distribution:\n{y.value_counts()}")
+        logger.info(f"Features shape: {X.shape}")
+        logger.info(f"Target distribution:\n{y.value_counts().to_dict()}")
+        
+        # Show sample of features
+        logger.info(f"Feature columns: {list(X.columns)}")
         
         return X, y
         
@@ -132,42 +162,30 @@ def load_csv_data():
         return None, None
 
 
-def create_updated_tar_gz(clf, scaler):
+def create_updated_tar_gz(clf, scaler, paths):
     """Create updated model.tar.gz with new model and scaler"""
     try:
-        # Save updated model and scaler
-        joblib.dump(clf, os.path.join(UPDATED_MODEL_DIR, "sgd_model.joblib"))
-        joblib.dump(scaler, os.path.join(UPDATED_MODEL_DIR, "scaler.joblib"))
+        # Save updated model and scaler to updated_model_dir
+        model_path = os.path.join(paths["updated_model_dir"], "sgd_model.joblib")
+        scaler_path = os.path.join(paths["updated_model_dir"], "scaler.joblib")
+        
+        joblib.dump(clf, model_path)
+        logger.info(f"✓ Saved updated model to {model_path}")
+        
+        joblib.dump(scaler, scaler_path)
+        logger.info(f"✓ Saved updated scaler to {scaler_path}")
         
         # Copy inference.py from extracted files or create new
-        inference_src = os.path.join(EXTRACT_DIR, "inference.py")
-        inference_dst = os.path.join(UPDATED_MODEL_DIR, "inference.py")
+        inference_src = os.path.join(paths["extract_dir"], "inference.py")
+        inference_dst = os.path.join(paths["updated_model_dir"], "inference.py")
         
         if os.path.exists(inference_src):
             shutil.copy2(inference_src, inference_dst)
             logger.info("✓ Copied inference.py from existing model")
         else:
-            logger.warning("inference.py not found in extracted files")
+            logger.warning("inference.py not found in extracted files, creating basic version")
             # Create basic inference.py
-            create_basic_inference_file(inference_dst)
-        
-        # Create new tar.gz
-        with tarfile.open(UPDATED_TAR_PATH, "w:gz") as tar:
-            tar.add(os.path.join(UPDATED_MODEL_DIR, "sgd_model.joblib"), arcname="sgd_model.joblib")
-            tar.add(os.path.join(UPDATED_MODEL_DIR, "scaler.joblib"), arcname="scaler.joblib")
-            tar.add(os.path.join(UPDATED_MODEL_DIR, "inference.py"), arcname="inference.py")
-        
-        logger.info(f"✓ Created updated model.tar.gz ({os.path.getsize(UPDATED_TAR_PATH) / 1024:.2f} KB)")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to create updated tar.gz: {str(e)}")
-        return False
-
-
-def create_basic_inference_file(file_path):
-    """Create a basic inference.py file"""
-    inference_code = '''import joblib
+            inference_code = '''import joblib
 import numpy as np
 import os
 import json
@@ -219,16 +237,35 @@ def output_fn(prediction, accept):
     else:
         raise ValueError(f"Unsupported accept type: {accept}")
 '''
-    
-    with open(file_path, "w") as f:
-        f.write(inference_code)
-    logger.info(f"Created basic inference.py at {file_path}")
+            with open(inference_dst, "w") as f:
+                f.write(inference_code)
+        
+        # Verify files exist before creating tar.gz
+        files_to_check = [model_path, scaler_path, inference_dst]
+        for file_path in files_to_check:
+            if not os.path.exists(file_path):
+                logger.error(f"File not found: {file_path}")
+                return False
+        
+        # Create new tar.gz
+        with tarfile.open(paths["updated_tar_path"], "w:gz") as tar:
+            tar.add(model_path, arcname="sgd_model.joblib")
+            tar.add(scaler_path, arcname="scaler.joblib")
+            tar.add(inference_dst, arcname="inference.py")
+        
+        file_size = os.path.getsize(paths["updated_tar_path"])
+        logger.info(f"✓ Created updated model.tar.gz ({file_size / 1024:.2f} KB)")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to create updated tar.gz: {str(e)}", exc_info=True)
+        return False
 
 
-def upload_to_s3(s3_client):
+def upload_to_s3(s3_client, paths):
     """Upload updated model.tar.gz to S3"""
     try:
-        s3_client.upload_file(UPDATED_TAR_PATH, S3_BUCKET, MODEL_TAR_S3_KEY)
+        s3_client.upload_file(paths["updated_tar_path"], S3_BUCKET, MODEL_TAR_S3_KEY)
         logger.info(f"✓ Uploaded updated model to s3://{S3_BUCKET}/{MODEL_TAR_S3_KEY}")
         return True
     except Exception as e:
@@ -290,20 +327,21 @@ def main():
     logger.info("STARTING PARTIAL FIT AUTOMATION")
     logger.info("=" * 60)
     
-    # Clean temp directories
-    clean_temp_directories()
-    
     # Initialize S3 client
     s3_client = boto3.client("s3", region_name=REGION)
     
     try:
+        # Step 0: Create all necessary directories
+        paths = clean_and_create_directories()
+        logger.info(f"Working in directory: {paths['temp_dir']}")
+        
         # Step 1: Download and extract model from S3
-        if not download_and_extract_model(s3_client):
+        if not download_and_extract_model(s3_client, paths):
             logger.error("Failed to download/extract model. Exiting.")
             sys.exit(1)
         
         # Step 2: Load model and scaler
-        clf, scaler = load_model_and_scaler()
+        clf, scaler = load_model_and_scaler(paths)
         if clf is None or scaler is None:
             logger.error("Failed to load model/scaler. Exiting.")
             sys.exit(1)
@@ -321,12 +359,12 @@ def main():
         logger.info("✓ Partial fit completed")
         
         # Step 5: Create updated model.tar.gz
-        if not create_updated_tar_gz(clf, scaler):
+        if not create_updated_tar_gz(clf, scaler, paths):
             logger.error("Failed to create updated model.tar.gz. Exiting.")
             sys.exit(1)
         
         # Step 6: Upload to S3
-        if not upload_to_s3(s3_client):
+        if not upload_to_s3(s3_client, paths):
             logger.error("Failed to upload to S3. Exiting.")
             sys.exit(1)
         
