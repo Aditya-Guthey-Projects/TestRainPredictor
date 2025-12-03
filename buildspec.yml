@@ -1,22 +1,30 @@
 version: 0.2
 
+env:
+  variables:
+    SAGEMAKER_VERSION: "2.254.1"
+
 phases:
   install:
     runtime-versions:
-      python: 3.11
+      python: 3.11  # or 3.10 to match notebook
     commands:
       - echo "Installing dependencies..."
       - pip install --upgrade pip
-      - pip install pandas scikit-learn joblib boto3 sagemaker
+      - pip install pandas scikit-learn joblib boto3
+      - pip install sagemaker==2.254.1  # Match notebook version
       - echo "Installation complete."
+      
+      # Verify installation
+      - echo "Verifying sagemaker version..."
+      - python -c "import sagemaker; print(f'SageMaker version: {sagemaker.__version__}')"
+      - python -c "from sagemaker import Model; print('✓ Model class imported successfully')"
 
   pre_build:
     commands:
       - echo "Environment check..."
       - python --version
-      - pip list | grep -E "(pandas|scikit|boto3|sagemaker)"
-      - echo "Current directory structure:"
-      - find . -type f -name "*.py" -o -name "*.csv" | head -20
+      - pip list | grep -E "(sagemaker|boto3)"
       - echo "Checking for csv_folder..."
       - ls -la csv_folder/ 2>/dev/null || echo "csv_folder not found or empty"
 
@@ -24,7 +32,6 @@ phases:
     commands:
       - echo "Running partial_fit automation..."
       - python partial_fit_automate.py || { echo "Script failed with exit code $?"; exit 1; }
-      - echo "Script completed successfully."
 
   post_build:
     commands:
