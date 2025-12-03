@@ -1,11 +1,19 @@
 version: 0.2
 
 phases:
+  pre_build:
+    commands:
+      - echo "Environment check..."
+      - python --version
+      - gcc --version
+      - pip --version
+
   install:
     runtime-versions:
-      python: 3.10
+      python: 3.11  # 3.11 available in newer images
     commands:
-      - echo "Installing compatible dependencies..."
+      - echo "Installing dependencies..."
+      - pip install --upgrade pip
       - pip install pandas scikit-learn joblib boto3
       - echo "Installation complete."
 
@@ -13,7 +21,6 @@ phases:
     commands:
       - echo "Listing source files..."
       - ls -R $CODEBUILD_SRC_DIR
-
       - echo "Running partial_fit automation..."
       - python partial_fit_automate.py
 
