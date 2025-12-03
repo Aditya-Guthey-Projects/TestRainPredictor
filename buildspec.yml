@@ -3,11 +3,10 @@ version: 0.2
 phases:
   install:
     runtime-versions:
-      python: 3.9
+      python: 3.10
     commands:
       - echo "Installing compatible dependencies..."
-      - pip install --upgrade pip
-      - pip install numpy==1.26.4 pandas==1.5.3 scikit-learn==1.2.2 joblib boto3
+      - pip install pandas scikit-learn joblib boto3
       - echo "Installation complete."
 
   build:
