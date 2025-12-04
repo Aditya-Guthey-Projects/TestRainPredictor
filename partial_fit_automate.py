@@ -473,7 +473,7 @@ except ImportError as e:
 
 # Try to ensure we have sklearn 1.7.2
 def ensure_correct_versions():
-    """Ensure we have the correct package versions."""
+    
     try:
         import sklearn
         if sklearn.__version__ != '1.7.2':
@@ -503,7 +503,7 @@ print(f"Final sklearn version: {sklearn.__version__}")
 print(f"Joblib version: {joblib.__version__}")
 
 def model_fn(model_dir):
-    """Load the model from the model_dir."""
+  
     print(f"Loading model from: {model_dir}")
     print(f"Files in model_dir: {os.listdir(model_dir)}")
     
@@ -526,7 +526,7 @@ def model_fn(model_dir):
         raise
 
 def input_fn(request_body, request_content_type):
-    """Parse input data."""
+  
     print(f"Received content type: {request_content_type}")
     print(f"Request body length: {len(request_body)}")
     
@@ -550,7 +550,7 @@ def input_fn(request_body, request_content_type):
     raise ValueError(f"Unsupported content type: {request_content_type}")
 
 def predict_fn(data, model):
-    """Make predictions."""
+ 
     print(f"Predicting on data with shape: {data.shape}")
     
     preds = model.predict(data)
@@ -572,7 +572,7 @@ def predict_fn(data, model):
         }
 
 def output_fn(prediction, content_type):
-    """Format predictions for response."""
+   
     print(f"Output content type: {content_type}")
     return json.dumps(prediction)
 """
