@@ -7,7 +7,7 @@ phases:
     commands:
       - echo "Installing dependencies..."
       - pip install --upgrade pip
-      - pip install pandas scikit-learn joblib boto3 sagemaker==2.254.1
+      - pip install pandas scikit-learn==1.7.2 joblib boto3 sagemaker==2.254.1
       - echo "Installation complete."
 
   pre_build:
